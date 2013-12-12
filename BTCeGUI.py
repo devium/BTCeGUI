@@ -7,6 +7,7 @@ import time
 import copy
 import os.path
 import datetime
+import queue
 import BTCe
 
 api = BTCe.API('BTCe.ini')
@@ -174,10 +175,10 @@ class ConsoleFrame(ttk.Frame):
 	"""Console."""
 	def __init__(self, parent):
 		ttk.Frame.__init__(self, parent, borderwidth=10, relief='groove')
-		self.lock = threading.Lock()
+		self.queue = queue.Queue()
 
 		# init widgets
-		self.text = tkinter.Text(self, height=6, width=10, state='disabled')
+		self.text = tkinter.Text(self, height=4, state='disabled')
 		vsb = ttk.Scrollbar(self, orient='vertical', command=self.text.yview)
 		self.text.config(yscrollcommand=vsb.set)
 
@@ -186,17 +187,22 @@ class ConsoleFrame(ttk.Frame):
 		self.text.grid(column=0, row=1, sticky='nsew')
 		vsb.grid(column=1, row=1, sticky='nse')
 
-		self.grid_columnconfigure(0, weight=1, minsize=50)
+		self.grid_columnconfigure(0, weight=1)
 		self.grid_columnconfigure(1, weight=0)
 		self.grid_rowconfigure(0, weight=0)
 		self.grid_rowconfigure(1, weight=1, pad=5)
 
 	def print(self, text):
-		self.lock.acquire()
+		self.queue.put(text)
+
+	def update(self):
+		atend = self.text.yview()[1] == 1.0
 		self.text.config(state='normal')
-		self.text.insert('end', '{}: {}\n'.format(datetime.datetime.now().strftime('%H:%M:%S'), text))
+		while not self.queue.empty():
+			self.text.insert('end', '{}: {}\n'.format(datetime.datetime.now().strftime('%H:%M:%S'), self.queue.get()))
 		self.text.config(state='disabled')
-		self.lock.release()
+		if atend:
+			self.text.see('end')
 
 class Console:
 	def print(self, text):
@@ -210,7 +216,7 @@ class OrderFrame(ttk.Frame):
 		ttk.Frame.__init__(self, parent, borderwidth=10, relief='groove')
 
 		# init widgets
-		self.table = ttk.Treeview(self, columns=['id', 'time', 'pair', 'type', 'rate', 'amount', 'value', 'status'], show='headings')
+		self.table = ttk.Treeview(self, columns=['id', 'time', 'pair', 'type', 'rate', 'amount', 'value', 'status'], show='headings', height=3)
 		vsb = ttk.Scrollbar(self, orient='vertical', command=self.table.yview)
 		self.table.config(yscrollcommand=vsb.set)
 		self.orderbutton = ttk.Button(self, text='Cancel Order(s)', state='disabled', command=self.cancelorders)
@@ -219,7 +225,7 @@ class OrderFrame(ttk.Frame):
 		ttk.Label(self, text='Open Orders').grid(column=0, row=0, sticky='w')
 		self.table.grid(column=0, row=1, sticky='nsew')
 		vsb.grid(column=1, row=1, sticky='ns')
-		self.orderbutton.grid(column=0, row=2, sticky='e', columnspan=1)
+		self.orderbutton.grid(column=0, row=2, sticky='nse')
 		self.grid_columnconfigure(0, weight=1, pad=5)
 		self.grid_columnconfigure(1, weight=0, pad=5)
 		self.grid_rowconfigure(0, weight=0)
@@ -437,11 +443,12 @@ class Main(tkinter.Tk):
 
 		self.grid_columnconfigure(0, weight=1)
 		self.grid_columnconfigure(1, weight=1)
+		self.grid_columnconfigure(2, weight=0)
 		self.grid_rowconfigure(0, weight=0)
 		self.grid_rowconfigure(1, weight=0)
-		self.grid_rowconfigure(2, weight=4, minsize=250)
-		self.grid_rowconfigure(3, weight=1, minsize=100)
-		self.grid_rowconfigure(3, weight=1, minsize=100)
+		self.grid_rowconfigure(2, weight=1)
+		self.grid_rowconfigure(3, weight=0)
+		self.grid_rowconfigure(4, weight=0)
 
 		# events
 		self.askframe.table.bind('<Double-1>', lambda event: self.ondouble_depth(self.askframe.table, self.buybox, event))
@@ -495,7 +502,8 @@ class Main(tkinter.Tk):
 		pair = []
 		if (depth):
 			pair = next(iter(depth))
-			fee = pairs[pair]['fee']
+			if pairs:
+				fee = pairs[pair]['fee']
 			depth = depth[pair]
 			pair = pair.upper().split('_')
 
@@ -507,6 +515,7 @@ class Main(tkinter.Tk):
 		self.buybox.update(pair, funds, fee, cantrade, self.buying)
 		self.sellbox.update(pair, funds, fee, cantrade, self.selling)
 		self.orderframe.update(orders, cantrade, self.cancelling)
+		self.console.update()
 
 		self.after(100, self.sync)
 
@@ -527,7 +536,7 @@ class Main(tkinter.Tk):
 				if depth['success'] == 1:
 					depth = depth['return']
 				else:
-					console.print('Error requesting depth: {}'.format(depth['error']))
+					console.print('[WARNING] Error requesting depth: {}'.format(depth['error']))
 					depth = None
 			self.lockdata.acquire()
 			self.depth = depth
@@ -550,7 +559,7 @@ class Main(tkinter.Tk):
 				if userinfo['success'] == 1:
 					userinfo = userinfo['return']
 				else:
-					console.print('Error requesting user info: {}'.format(userinfo['error']))
+					console.print('[WARNING] Error requesting user info: {}'.format(userinfo['error']))
 					userinfo = None
 			self.lockdata.acquire()
 			self.userinfo = userinfo
@@ -574,7 +583,7 @@ class Main(tkinter.Tk):
 				orders = orders['return']
 			else:
 				if orders['error'] != 'no orders':
-					console.print('Error requesting open orders: {}'.format(orders['error']))
+					console.print('[WARNING] Error requesting open orders: {}'.format(orders['error']))
 				orders = None
 		self.lockdata.acquire()
 		self.orders = orders
@@ -597,7 +606,7 @@ class Main(tkinter.Tk):
 				if info['success'] == 1:
 					info = info['return']
 				else:
-					console.print('Error requesting public info: {}'.format(orders['error']))
+					console.print('[WARNING] Error requesting public info: {}'.format(info['error']))
 					info = None
 			self.lockdata.acquire()
 			self.info = info
@@ -624,7 +633,7 @@ class Main(tkinter.Tk):
 			if response['success'] == 1:
 				console.print('Order placed successfully.')
 			else:
-				console.print('Error placing order: {}'.format(response['error']))
+				console.print('[WARNING] Error placing order: {}'.format(response['error']))
 
 		self.update_orders()
 		self.update_userinfo()
@@ -645,7 +654,7 @@ class Main(tkinter.Tk):
 				if response['success'] == 1:
 					console.print('Order cancelled successfully.')
 				else:
-					console.print('Error cancelling order: {}'.format(response['error']))
+					console.print('[WARNING] Error cancelling order: {}'.format(response['error']))
 		self.update_orders()
 		self.update_userinfo()
 		self.cancelling = False
@@ -653,5 +662,3 @@ class Main(tkinter.Tk):
 root = Main()
 root.mainloop()
 root.exit()
-
-api.save()
